@@ -1,2 +1,2 @@
-# candy
-this is my first project
+# candy-vue
+clone mini-vue
