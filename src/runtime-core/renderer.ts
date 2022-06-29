@@ -1,4 +1,6 @@
 import { ShapeFlags } from "../shared";
+import { createComponentInstance, setupComponent } from "./component";
+import { shouldUpdateComponent } from "./componentRenderUtils";
 import { Fragment, normalizeVNode, Text } from "./vnode";
 
 export function createRenderer(options) {
@@ -8,6 +10,7 @@ export function createRenderer(options) {
     patchProp: hostPatchProp,
     insert: hostInsert,
     remove: hostRemove,
+    setText: hostSetText,
     createText: hostCreateText
   } = options //操作真实DOM树的方法
 
@@ -213,6 +216,66 @@ export function createRenderer(options) {
       }
     } else {
       // 从左到右新增的，修改的都处理完后,判断中间顺序变化的情况
+      let s1 = i;
+      let s2 = i;
+      const keyToNewIndexMap = new Map();
+      let moved = false;
+      let maxNewIndexSoFar = 0
+
+      // 绑定key 和 nextValue值，方便基于key找到newIndex
+      for(let i = s2; i < e2; i++) {
+        const nextChild = c2[i];
+        keyToNewIndexMap.set(nextChild.key, i);
+      }
+
+      // 需要处理的新节点的数量
+      const toBePatched = e2 - s2 + 1; 
+      let patched = 0;
+      const newIndexToOldIndexMap = new Array(toBePatched); // 创建数组的时候给定数组的长度，这里可以判断出有多少新节点需要处理
+      for(let i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0;
+
+      for(i = s1; i <= e1; i++) {
+        //遍历旧的节点，如果新节点没有，删除，反之patch
+        const prevChild = c1[i];
+
+        if(patched >= toBePatched) {
+          // 如果新节点的数量少于旧节点的数量就直接删除了
+          hostRemove(prevChild.el);
+          continue;
+        }
+        let newIndex; // 当前节点
+        if(prevChild.key != null) {
+          // 这里就直接可以通过key去获取到对应的节点了
+          newIndex = keyToNewIndexMap.get(prevChild.key);
+        } else {
+          // 如果没有key的情况
+          for (let j = s2; j <= e2; j++) {
+            // 如果遍历后对比新旧节点是相同的话就能获取到对应的节点
+            if(isSameVNodeType(prevChild, c2[j])) {
+              newIndex = j
+              break;
+            }
+          }
+        }
+
+        if (newIndex === undefined) {
+          // 如果通过遍历得到的当前节点是undefined，那么就删除当前节点
+          hostRemove(prevChild.el)
+        } else {
+          // 绑定新节点的索引位置
+          newIndexToOldIndexMap[newIndex - s2] = i + 1
+
+          //判断newIndex是否是一直升序的，用此来确定节点有没有移动
+          if (newIndex >= maxNewIndexSoFar) {
+            maxNewIndexSoFar = newIndex;
+          } else {
+            moved = true;
+          }
+          patch(prevChild, c2[newIndex], container, null, parentComponent);
+          patched++
+        }
+      }
+
       // todo
     }
   }
@@ -222,17 +285,57 @@ export function createRenderer(options) {
     if (n1 === null) {
       //当n1没有内容的时候，初始化Text节点
       hostInsert((n2.el = hostCreateText(n2.children as string)), container)
+    } else {
+      // 更新Text类型的节点
+      const el = (n2.el = n2.el!);
+      if (n2.children !== n1.children) {
+        hostSetText(el, n2.children as string);
+      }
     }
   }
 
   //处理Fragment类型
   function processFragment(n1, n2, container) {
-
+    if (!n1) {
+      mountChildren(n2.children, container);
+    }
   }
 
   // 处理 Component 类型
   function processComponent(n1, n2, container, parentComponent) {
+    // 如果没有旧节点n1，执行初始化component操作
+    if (!n1) {
+      mountComponent(n2, container, parentComponent);
+    } else {
+      updateComponent(n1, n2, container);
+    }
+  }
 
+  function mountComponent (initialVNode, container, parentComponent) {
+    // 初始化挂载组件
+    const instance = (initialVNode.component = createComponentInstance(initialVNode, parentComponent));
+
+    setupComponent(instance);
+    setupRenderEffect(instance, initialVNode, container)
+  }
+
+  function updateComponent(n1, n2, container) {
+    // 更新组件的方法
+    const instance = (n2.component = n1.component);
+    // 检查组件是否需要更新
+    if (shouldUpdateComponent(n1, n2)) {
+      instance.next = n2
+      instance.update();
+    } else {
+      // 组件不需要更新
+      n2.component = n1.component;
+      n2.el = n1.el;
+      instance.vnode = n2
+    }
+  }
+
+  function setupRenderEffect(instance, initialVNode, container) {
+    // todo
   }
 }
 
