@@ -62,6 +62,10 @@ function remove(child) {
   }
 }
 
+function setText(node, text) {
+  node.nodeValue = text;
+}
+
 function createText(text) {
   return document.createTextNode(text)
 }
