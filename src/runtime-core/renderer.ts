@@ -2,16 +2,20 @@ import { ShapeFlags } from "../shared";
 import { createComponentInstance, setupComponent } from "./component";
 import { shouldUpdateComponent } from "./componentRenderUtils";
 import { Fragment, normalizeVNode, Text } from "./vnode";
+import { effect } from "../effect"
+import { queueJob } from "./scheduler"
+import { createAppAPI } from "./createApp";
+
 
 export function createRenderer(options) {
   const {
     setElementText: hostSetTextELement,
     createElement: hostCreateElement,
-    patchProp: hostPatchProp,
-    insert: hostInsert,
-    remove: hostRemove,
-    setText: hostSetText,
-    createText: hostCreateText
+    patchProp: hostPatchProp, // 元素节点加载
+    insert: hostInsert, // insertBefore
+    remove: hostRemove, // removeChild
+    setText: hostSetText, // nodeValue
+    createText: hostCreateText // document.createTextNode
   } = options //操作真实DOM树的方法
 
   const render = (vnode, container) => {
@@ -312,11 +316,73 @@ export function createRenderer(options) {
   }
 
   function mountComponent (initialVNode, container, parentComponent) {
-    // 初始化挂载组件
+    // 初始化挂载组件,创建一个component instance 组件实例
     const instance = (initialVNode.component = createComponentInstance(initialVNode, parentComponent));
 
     setupComponent(instance);
     setupRenderEffect(instance, initialVNode, container)
+  }
+
+  function setupRenderEffect(instance, initialVNode, container) {
+    // todo
+
+    function componentUpdateFn() {
+      // 如果实例没有被初始化挂载
+      if(!instance.isMounted) {
+        // effect中调用render触发effect的依赖收集
+        // 调用render函数，获取subTree
+        const proxyToUse = instance.proxy;
+        const subTree = (instance.subTree = normalizeVNode(instance.render.call(proxyToUse, proxyToUse)))
+        console.log("subTree", subTree)
+        // component不需要渲染，实际需要渲染的是component里面的subTree
+        patch(null, subTree, container, null, instance);
+        initialVNode.el = subTree.el;
+        instance.isMounted = true;
+      } else {
+        // 实例已经被挂载，更新操作
+        // 拿到更新的 subTree
+        const { vnode, next } = instance;
+
+        // 如果next存在说明需要更新component里面props或者slots的数据
+        if (next) {
+          next.el = vnode.el;
+          updateComponentPreRender(instance, next)
+        }
+
+        const proxyToUse = instance.proxy;
+        const nextTree = normalizeVNode(instance.render.call(proxyToUse, proxyToUse));
+        const prevTree = instance.subTree;
+        instance.subTree = nextTree;
+        // 再调用patch更新component中的内容
+        patch(prevTree, nextTree, prevTree.el, null, instance);
+      }
+    }
+
+    instance.update = effect(componentUpdateFn, {
+      scheduler: () => {
+        // 微任务；
+        queueJob(instance.update);
+      }
+    })
+  }
+
+  function updateComponentPreRender(instance, nextVNode) {
+    nextVNode.component = instance;
+    nextVNode.vnode = nextVNode;
+    nextVNode.next = null;
+
+    // TODO 在这之后更新 props 的时候需要进行对比
+    // 之前的props是基于instance.vnode.props来获取的
+
+    //更新props
+    const { props, slots } = nextVNode;
+    instance.props = props;
+    // 更新slots
+    instance.slots = slots;
+
+    return {
+      createApp: createAppAPI(render)
+    }
   }
 
   function updateComponent(n1, n2, container) {
@@ -332,10 +398,6 @@ export function createRenderer(options) {
       n2.el = n1.el;
       instance.vnode = n2
     }
-  }
-
-  function setupRenderEffect(instance, initialVNode, container) {
-    // todo
   }
 }
 
